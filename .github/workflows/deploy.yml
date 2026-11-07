@@ -1,4 +1,4 @@
-name: Deploy docs
+name: Deploy VitePress to GitHub Pages
 
 on:
   push:
@@ -10,6 +10,7 @@ permissions:
   pages: write
   id-token: write
 
+# 同一时间只跑一个部署，但不打断正在进行的生产部署
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -18,17 +19,32 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      # 项目页部署在 https://yuxinrun.github.io/langchain-langgraph/ 子路径下
       BASE: /langchain-langgraph/
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # lastUpdated 依赖完整 git 历史，浅克隆会让所有页面显示同一时间
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
-      - run: npm run build
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build site
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: docs/.vitepress/dist
 
@@ -39,5 +55,6 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - id: deployment
+      - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4

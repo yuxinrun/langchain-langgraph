@@ -24,7 +24,11 @@ npm run preview      # 本地预览构建产物
 
 ## 部署
 
-GitHub Pages 部署见 `.github/workflows/deploy.yml`。子路径部署时通过环境变量 `BASE=/langchain-langgraph/` 注入。
+线上地址：<https://yuxinrun.github.io/langchain-langgraph/>
+
+推送到 `main` 后由 GitHub Actions 自动构建并发布到 GitHub Pages，工作流见 `.github/workflows/deploy.yml`。本站部署在项目页子路径 `/langchain-langgraph/` 下，构建时通过环境变量 `BASE=/langchain-langgraph/` 注入。
+
+首次部署前需在仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**；之后每次 push 会自动发布。
 
 ## 目录结构
 
