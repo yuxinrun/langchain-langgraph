@@ -19,8 +19,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # 项目页部署在 https://yuxinrun.github.io/langchain-langgraph/ 子路径下
-      BASE: /langchain-langgraph/
+      # 项目页子路径：https://yuxinrun.github.io/langchain-langgraph/
+      # 用仓库名自动推导，迁到其他仓库无需改这一行
+      BASE: "/${{ github.event.repository.name }}/"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

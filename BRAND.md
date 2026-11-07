@@ -591,7 +591,145 @@ start-a-business 的吉祥物 `founder-fish.svg` 是**手绘矢量**而非生成
 
 ---
 
-## 十、资产清单与出处
+## 十、GitHub Pages 集成规范
+
+> 本站 `langchain-langgraph` 的真实验证过的一套做法（2026-11 上线，Actions 一次跑通）。目标：`git push origin main` 之后，站点自动出现在 `https://<user>.github.io/<repo>/`。迁到任何 VitePress 站点，只需复制 10.3 的 workflow。
+
+### 10.1 流水线只做四件事
+
+```
+push main ─▶ checkout(fetch-depth 0) ─▶ setup-node 20 + npm cache ─▶ npm ci
+         ─▶ vitepress build（注入 BASE）─▶ upload-pages-artifact
+         ─▶ deploy-pages ─▶ https://<user>.github.io/<repo>/
+```
+
+- **不建 `gh-pages` 分支**：产物只存在于 Actions artifact 与 Pages 服务端，仓库里永远只有源码。
+- **不走 Jekyll**：Pages 的 Source 选 GitHub Actions 后，发布直接消费 artifact，`.nojekyll`、`_config.yml` 一律不需要。
+- **不改主题**：部署层与品牌层完全解耦，换皮肤不影响发布链路。
+
+### 10.2 五条硬约束
+
+| 约束 | 做法 | 不这么做会怎样 |
+| --- | --- | --- |
+| 仓库只能有一个 Pages 工作流 | 删掉模板自带的 `jekyll-gh-pages.yml` | 两个 workflow 抢同一个站点，互相覆盖，线上时好时坏 |
+| 子路径必须注入 base | `BASE: "/${{ github.event.repository.name }}/"` | CSS/JS 请求 404，页面裸奔 |
+| 必须完整 git 历史 | `actions/checkout` 加 `fetch-depth: 0` | `lastUpdated` 全部变成构建当天，读者看到「全站同一天更新」 |
+| 锁文件必须同步 | CI 用 `npm ci`；本地改依赖后提交 `package-lock.json` | `npm ci` 直接失败；换成 `npm install` 则版本漂移，构建不可复现 |
+| 产物不入库 | `.gitignore` 掉 `docs/.vitepress/dist/` 与 `.vitepress/cache/` | 每次构建产生成千行 diff，仓库体积暴涨 |
+
+### 10.3 可复制的最小工作流
+
+> 放到 `.github/workflows/deploy.yml`。`BASE` 由仓库名自动推导，迁到新仓库**一行都不用改**；只有改了 VitePress 输出目录（默认 `docs/.vitepress/dist`）时才需要动 `path`。
+
+```yaml
+name: Deploy VitePress to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个部署，但不打断正在进行的生产部署
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # 项目页子路径，用仓库名推导；若是 user.github.io 或自定义根域名，改成 '/'
+      BASE: "/${{ github.event.repository.name }}/"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # lastUpdated 依赖完整 git 历史
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build site
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+```
+
+### 10.4 子路径部署：哪些地方要手动带 base
+
+原则：**VitePress 只自动处理它自己生成的链接**，手写进配置、组件、HTML 字符串里的绝对路径必须自己拼，否则本地一切正常、线上静默 404。config 里统一 `const base = process.env.BASE ?? '/'`，再按下表取舍：
+
+| 位置 | 写法 | 自动带 base |
+| --- | --- | --- |
+| Markdown 内部链接 `[x](/guide/why)` | 原样写 | 是（router 处理） |
+| `themeConfig.logo` | 原样写 `'/logo.svg'` | 是（Logo 组件内部 `withBase`） |
+| `head` 里的 favicon | 手工 `` `${base}favicon.svg` `` | 否 |
+| `themeConfig.footer.message` 里的 `<img src>` | 手工 `` `${base}yuxin-run.png` `` | 否 |
+| Vue 组件里的 `<img :src>` | `withBase('/yuxin-run.png')` | 否 |
+| Markdown 正文图片 `![](/x.png)` | 手工拼 base，或改用相对路径 | 否 |
+
+### 10.5 首次上线四步
+
+1. 仓库 **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**。
+   `configure-pages` 的 `enablement: true` 不能用 `GITHUB_TOKEN` 自动开启（必须给 PAT），所以这一步只能手点，且只需一次。
+2. push 到 `main`，等 Actions 里的 `Deploy VitePress to GitHub Pages` 变绿。
+3. 打开 `https://<user>.github.io/<repo>/`，确认首页 200。
+4. 抽查资源与深链：CSS/JS 全部 200 且 URL 带 `/<repo>/` 前缀；直接访问一个深层链接（不经首页）；再访问一个不存在的路径，确认品牌化 404 生效。
+
+### 10.6 上线校验清单
+
+| 检查 | 期望 |
+| --- | --- |
+| Actions 运行结论 | `completed / success` |
+| 首页 | 200，`<title>` 与 frontmatter 一致 |
+| 深层链接（直接输入地址） | 200，Pages 直接返回对应 HTML |
+| CSS / JS / logo / 吉祥物 | 200，URL 带 `/<repo>/` 前缀 |
+| `404.html` | 200，品牌化 404 文案生效 |
+| `lastUpdated` | 显示真实提交日期，而不是构建当天 |
+
+### 10.7 踩过的四个坑
+
+- **本地与 CI 的产物 hash 不同**。同一个 `style.css`，本地构建出 `style.CJvAe9Mv.css`，CI 构建出 `style.PjpAmUuP.css`——依赖版本/平台的细微差异都会改 hash。验证线上资源时，**必须用首页 HTML 里实际引用的文件名**去请求，不要拿本地 `dist` 里的文件名去猜。
+- **Pages Source 没设成 GitHub Actions 时，deploy 一步会报 `Get Pages site failed / Not Found`**。此时 build 是绿的，只是发布失败，容易误判成配置写错。
+- **浅克隆会毁掉时间感**。`lastUpdated: true` 读的是 `git log`，`fetch-depth: 1` 时全站页面显示同一时间，读者会以为整站是同一天倒出来的。
+- **重命名仓库等于搬家**。`/<repo>/` 一变，`BASE` 会自动跟随仓库名，但旧链接、外链和搜索引擎索引全部失效——公测后再改名代价最高。
+
+### 10.8 换自定义域名
+
+在 Settings → Pages 填 Custom domain（并在 `docs/public/CNAME` 写入域名），然后把工作流的 `BASE` 改成 `'/'`，其余不动。子域名（如 `langchain.yuxin.run`）同理，只是别忘了在 DNS 侧加 `CNAME` 记录指向 `<user>.github.io`。
+
+---
+
+## 十一、资产清单与出处
 
 | 类别 | 文件 |
 | --- | --- |
@@ -602,6 +740,6 @@ start-a-business 的吉祥物 `founder-fish.svg` 是**手绘矢量**而非生成
 | 品牌资产 | [docs/public/](file:///D:/yuxinrun/mcp-patterns/docs/public)：`logo.svg`、`logo-dark.svg`、`favicon.svg`、`yuxin-run.png` |
 | 组件 | `docs/.vitepress/theme/components/`：`BrandMark` `HeroDiagram` `McpArch` `RatingBars` `SpecTimeline` `AuthFlow` |
 | 品牌自述（含设计语言声明） | [docs/about.md](file:///D:/yuxinrun/mcp-patterns/docs/about.md) |
-| 部署 | [.github/workflows/deploy.yml](file:///D:/yuxinrun/mcp-patterns/.github/workflows/deploy.yml) → GitHub Pages，仓库名前缀用 `BASE=/mcp-patterns/` |
+| 部署 | [.github/workflows/deploy.yml](file:///D:/yuxinrun/mcp-patterns/.github/workflows/deploy.yml) → GitHub Pages，仓库名前缀用 `BASE=/mcp-patterns/`；通用规范见第十节 |
 
 一句话概括这套设计：**用暖白纸面与深海墨绿做底，用青色做唯一的声音、珊瑚红做风险的提醒；大标题靠可变字重与负字距撑住气势，所有元信息交给等宽大写小字；层级靠照度与虚线而不是靠粗边框；代码块永远是深色的，因为代码比装饰重要。**
